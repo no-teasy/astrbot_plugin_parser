@@ -210,7 +210,7 @@ class ParseResult:
         return None
 
     @property
-    def formartted_datetime(self, fmt: str = "%Y-%m-%d %H:%M:%S") -> str | None:
+    def formatted_datetime(self, fmt: str = "%Y-%m-%d %H:%M:%S") -> str | None:
         """格式化时间戳"""
         return datetime.fromtimestamp(self.timestamp).strftime(fmt) if self.timestamp is not None else None
 
