@@ -1,5 +1,5 @@
-from asyncio import to_thread
 import uuid
+from asyncio import to_thread
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
@@ -789,7 +789,7 @@ class CommonRenderer:
         )
 
         # 时间
-        time_text = result.formartted_datetime
+        time_text = result.formatted_datetime
         time_lines = self._wrap_text(
             time_text,
             text_area_width,
