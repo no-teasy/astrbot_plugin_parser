@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import re
 from collections import OrderedDict
 from http import cookiejar
 from pathlib import Path
@@ -8,7 +7,6 @@ from typing import TypeVar
 from urllib.parse import urlparse
 
 from astrbot.api import logger
-from astrbot.core.message.components import BaseMessageComponent, Node, Nodes
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -27,35 +25,6 @@ class LimitedSizeDict(OrderedDict[K, V]):
         super().__setitem__(key, value)
         if len(self) > self.max_size:
             self.popitem(last=False)  # 移除最早添加的项
-
-
-def construct_forward_message(
-    chain: list[BaseMessageComponent],
-    user_id: str | None = None,
-) -> Nodes:
-    """构造转发消息
-
-    Args:
-        chain (list[BaseMessageComponent]): 消息链
-        user_id (str): 用户ID
-
-    Returns:
-        Nodes: 转发组件
-    """
-    if user_id is None:
-        user_id = "114514"
-    nodes = Nodes([])
-    for seg in chain:
-        node = Node(uin=user_id, name="astrbot", content=[seg])
-        nodes.nodes.append(node)
-
-    return nodes
-
-def keep_zh_en_num(text: str) -> str:
-    """
-    保留字符串中的中英文和数字
-    """
-    return re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9\-_]", "", text.replace(" ", "_"))
 
 
 async def safe_unlink(path: Path):

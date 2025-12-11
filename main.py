@@ -3,7 +3,6 @@
 import asyncio
 import re
 import time
-from asyncio import Queue
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -11,12 +10,20 @@ from astrbot.api import logger
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
-from astrbot.core.message.components import At, Forward, Image, Node, Nodes, Record, Video
+from astrbot.core.message.components import (
+    At,
+    Forward,
+    Image,
+    Node,
+    Nodes,
+    Record,
+    Video,
+)
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 
 from .core.clean import CacheCleaner
 from .core.download import Downloader
-from .core.parsers import BaseParser, BilibiliParser, ParseResult, YouTubeParser
+from .core.parsers import BaseParser, BilibiliParser, YouTubeParser
 from .core.render import CommonRenderer
 from .core.utils import save_cookies_with_netscape
 
@@ -175,62 +182,40 @@ class ParserPlugin(Star):
 
         # 抢断机制
         if self.config["enable_tackle"]:
-            if any(
-                isinstance(seg, Video | Record | Nodes | Node | Forward)
-                for seg in chain
-            ):
+            if any(isinstance(seg, Video | Record | Nodes | Node | Forward) for seg in chain):
                 old_task = self.running_tasks.pop(umo, None)
                 if old_task and not old_task.done():
                     old_task.cancel()
-                    logger.warning(
-                        f"[抢断机制] 检测到媒体消息，已取消会话 {umo} 的解析任务"
-                    )
+                    logger.warning(f"[抢断机制] 检测到媒体消息，已取消会话 {umo} 的解析任务")
                 return
 
-        # 创建队列和协程任务
-        queue: Queue = Queue()
-        coro = self._do_parse(event, keyword, searched, umo, queue)
-        task = asyncio.create_task(coro)
+        async def job() -> list:
+            parse_res = await self.parser_map[keyword].parse(keyword, searched)  # 解析
+            return await self.renderer.render_messages(parse_res) # 渲染
+
+        # 任务
+        task = asyncio.create_task(job())
         self.running_tasks[umo] = task
-
-        # 实时从队列拿数据并 yield
         try:
-            while True:
-                item = await queue.get()
-                if item is None:  # 结束标志
-                    break
-                yield item  # 逐条实时发给框架
+            segs = await task  # 这里可能被 cancel
         except asyncio.CancelledError:
-            return  # 如果被外部取消，也停止转发
+            logger.debug(f"解析/渲染任务被取消 - {umo}")
+            return
         finally:
-            task.cancel()
             self.running_tasks.pop(umo, None)
 
-    async def _do_parse(
-        self,
-        event: AstrMessageEvent,
-        keyword: str,
-        searched: re.Match,
-        umo: str,
-        queue: Queue,
-    ) -> None:
-        """
-        普通协程，可被 create_task 调度；
-        实时把每条链结果 put 进队列，外部实时 get 并 yield。
-        """
-        try:
-            parser = self.parser_map[keyword]
-            parse_res: ParseResult = await parser.parse(keyword, searched)
+        # 合并转发
+        if len(segs) >= self.config["forward_threshold"]:
+            nodes = Nodes([])
+            for seg in segs:
+                node = Node(uin="10000", name="解析器", content=[seg])
+                nodes.nodes.append(node)
+            segs.clear()
+            segs.append(nodes)
 
-            async for chain in self.renderer.render_messages(parse_res):
-                await queue.put(event.chain_result(chain))  # type: ignore
-                await asyncio.sleep(0)  # 让出事件循环，使 cancel 更及时
-        except asyncio.CancelledError:
-            logger.debug(f"解析协程被取消 - {umo}")
-            raise
-        finally:
-            await queue.put(None)  # 告诉消费者“没数据了”
-            self.running_tasks.pop(umo, None)
+        # 发送消息
+        yield event.chain_result(segs)
+
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bm")

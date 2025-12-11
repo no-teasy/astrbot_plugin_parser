@@ -1,6 +1,7 @@
+
 import uuid
 from asyncio import to_thread
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from io import BytesIO
@@ -15,7 +16,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.message.components import BaseMessageComponent, Plain, Record, Video
+from astrbot.core.message.components import (
+    BaseMessageComponent,
+    Plain,
+    Record,
+    Video,
+)
 from astrbot.core.message.components import Image as AstrImage
 
 from .exception import DownloadException, DownloadLimitException, ZeroSizeException
@@ -27,7 +33,6 @@ from .parsers import (
     ParseResult,
     VideoContent,
 )
-from .utils import construct_forward_message
 
 # 定义类型变量
 P = ParamSpec("P")
@@ -365,6 +370,60 @@ class CommonRenderer:
                     cls.platform_logos[str(platform_name)] = img.convert("RGBA")
 
 
+    async def render_messages(self, result: ParseResult) -> list[BaseMessageComponent]:
+        """渲染消息"""
+        segs: list[BaseMessageComponent] = []
+
+        # 1.获取媒体内容
+        failed = 0
+
+        for cont in chain(
+            result.contents, result.repost.contents if result.repost else ()
+        ):
+            try:
+                path = await cont.get_path()
+            except (DownloadLimitException, ZeroSizeException):
+                continue  # 预期异常，不抛出
+            except DownloadException:
+                failed += 1
+                continue
+
+            match cont:
+                case VideoContent() | DynamicContent():
+                    segs.append(Video(str(path)))
+                case AudioContent():
+                    segs.append(Record(str(path)))
+                case ImageContent() | GraphicsContent():
+                    segs.append(AstrImage(str(path)))
+                case GraphicsContent() as g:
+                    if g.text:
+                        segs.append(Plain(g.text))
+                    if g.alt:
+                        segs.append(Plain(g.alt))
+
+        if failed:
+            segs.append(Plain(f"{failed} 项媒体下载失败"))
+
+        if result.text:
+            segs.append(Plain(result.text))
+
+        # 2. 生成帖子卡片
+        if result.render_image is None:
+            cache_key = uuid.uuid4().hex
+            cache_file = self.cache_dir / f"card_{cache_key}.png"
+            if not cache_file.exists():
+                image = await self._create_card_image(result)
+                output = BytesIO()
+                await to_thread(image.save, output, format="PNG")
+                async with aiofiles.open(cache_file, "wb+") as f:
+                    await f.write(output.getvalue())
+            result.render_image = cache_file
+
+        img_seg = AstrImage(str(result.render_image))
+        segs.append(img_seg)
+
+        return segs
+
     async def text(
         self,
         ctx: RenderContext,
@@ -385,134 +444,6 @@ class CommonRenderer:
         )
         return font.line_height * len(lines)
 
-
-    async def render_messages(self, result: ParseResult):
-        """渲染消息
-
-        Args:
-            result (ParseResult): 解析结果
-        """
-        yield [await self.cache_or_render_image(result)]
-
-        # 媒体内容
-        async for message in self.render_contents(result):
-            yield message
-
-    async def cache_or_render_image(self, result: ParseResult) -> AstrImage:
-        """获取缓存图片
-
-        Args:
-            result (ParseResult): 解析结果
-
-        Returns:
-            Image: 图片组件
-        """
-        if result.render_image is None:
-            image_raw = await self.render_image(result)
-            image_path = await self.save_img(image_raw)
-            result.render_image = image_path
-
-        return AstrImage(str(result.render_image))
-
-
-    async def save_img(self, raw: bytes) -> Path:
-        """保存图片
-
-        Args:
-            raw (bytes): 图片字节
-
-        Returns:
-            Path: 图片路径
-        """
-        file_name = f"{uuid.uuid4().hex}.png"
-        image_path = self.cache_dir / file_name
-        async with aiofiles.open(image_path, "wb+") as f:
-            await f.write(raw)
-        return image_path
-
-    async def render_contents(
-        self, result: ParseResult
-    ) -> AsyncGenerator[list[BaseMessageComponent], None]:
-        """渲染媒体内容消息
-
-        Args:
-            result (ParseResult): 解析结果
-
-        Returns:
-            AsyncGenerator[UniMessage[Any], None]: 消息生成器
-        """
-        failed_count = 0
-        forward_segs: list[BaseMessageComponent] = []
-        dynamic_segs: list[BaseMessageComponent] = []
-
-        for cont in chain(
-            result.contents, result.repost.contents if result.repost else ()
-        ):
-            try:
-                path = await cont.get_path()
-            # 继续渲染其他内容, 类似之前 gather (return_exceptions=True) 的处理
-            except (DownloadLimitException, ZeroSizeException):
-                # 预期异常，不抛出
-                # yield UniMessage(e.message)
-                continue
-            except DownloadException:
-                failed_count += 1
-                continue
-
-            match cont:
-                case VideoContent():
-                    yield [Video(str(path))]
-                case AudioContent():
-                    yield [Record(str(path))]
-                case ImageContent():
-                    forward_segs.append(AstrImage(str(path)))
-                case DynamicContent():
-                    dynamic_segs.append(Video(str(path)))
-                case GraphicsContent() as graphics:
-                    forward_segs.append(AstrImage(str(path)))
-                    if graphics.text:
-                        forward_segs.append(Plain(graphics.text))
-                    if graphics.alt:
-                        forward_segs.append(Plain(graphics.alt))
-
-        if forward_segs:
-            if result.text:
-                forward_segs.append(Plain(result.text))
-
-            if self.config["forward_contents"] or len(forward_segs) > 4:
-                forward_msg = construct_forward_message(
-                    forward_segs + dynamic_segs
-                )
-                yield [forward_msg]
-            else:
-                yield forward_segs
-
-                if dynamic_segs:
-                    yield [construct_forward_message(dynamic_segs)]
-
-        if failed_count > 0:
-            message = f"{failed_count} 项媒体下载失败"
-            yield [Plain(message)]
-            raise DownloadException(message)
-
-    async def _save_image_to_bytes(self, image: PILImage) -> bytes:
-        output = BytesIO()
-        # 真正耗时的编码在线程里跑
-        await to_thread(image.save, output, format="PNG")
-        return output.getvalue()
-
-    async def render_image(self, result: ParseResult) -> bytes:
-        """使用 PIL 绘制通用社交媒体帖子卡片
-
-        Args:
-            result: 解析结果
-
-        Returns:
-            PNG 图片的字节数据，如果没有足够的内容则返回 None
-        """
-        # 调用内部方法生成图片
-        image = await self._create_card_image(result)
-        return await self._save_image_to_bytes(image)
 
     async def _create_card_image(
         self,
