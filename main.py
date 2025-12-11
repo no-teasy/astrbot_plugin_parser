@@ -215,7 +215,8 @@ class ParserPlugin(Star):
             segs.append(nodes)
 
         # 发送消息
-        yield event.chain_result(segs)
+        if segs:
+            yield event.chain_result(segs)
 
 
     @filter.permission_type(filter.PermissionType.ADMIN)
