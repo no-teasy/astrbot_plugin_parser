@@ -2,6 +2,8 @@
 
 import asyncio
 import re
+import time
+from asyncio import Queue
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from astrbot.api import logger
 from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core import AstrBotConfig
-from astrbot.core.message.components import Image, Record
+from astrbot.core.message.components import Forward, Image, Node, Nodes, Record, Video
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 
 from .core.clean import CacheCleaner
@@ -50,6 +52,12 @@ class ParserPlugin(Star):
 
         # 缓存清理器
         self.cleaner = CacheCleaner(self.context, self.config)
+
+        # 链接防抖缓存 {session_id: {link_content: timestamp}}
+        self.link_cache: dict[str, dict[str, float]] = {}
+
+        # 会话 -> 正在运行的解析任务
+        self.running_tasks: dict[str, asyncio.Task] = {}
 
     async def initialize(self):
         """加载、重载插件时触发"""
@@ -107,7 +115,7 @@ class ParserPlugin(Star):
         raise ValueError(f"未找到类型为 {parser_type} 的 parser 实例")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
-    async def prob_read_feed(self, event: AstrMessageEvent):
+    async def on_message(self, event: AstrMessageEvent):
         """消息的统一入口"""
         umo = event.unified_msg_origin
 
@@ -133,16 +141,90 @@ class ParserPlugin(Star):
         if searched is None:
             return
 
+        # 防抖机制
+        interval = self.config["debounce_interval"]
+        if interval:
+            link = searched.group()
+            session_history = self.link_cache.setdefault(umo, {})
+            current_time = time.time()
+
+            # 清理过期记录
+            keys_to_remove = [
+                k
+                for k, t in session_history.items()
+                if current_time - t > self.config["debounce_interval"]
+            ]
+            for k in keys_to_remove:
+                del session_history[k]
+
+            # 检查是否最近解析过
+            if link in session_history:
+                logger.debug(f"[防抖机制] 链接 {link} 在防抖时间内，跳过解析")
+                return
+
+            # 更新缓存
+            session_history[link] = current_time
+
         logger.debug(f"匹配结果: {keyword}, {searched}")
 
-        # 取解析器
-        parser = self.parser_map[keyword]
-        # 解析
-        parse_res: ParseResult = await parser.parse(keyword, searched)
+        # 抢断机制
+        if self.config["enable_tackle"]:
+            if any(
+                isinstance(seg, Video | Record | Nodes | Node | Forward)
+                for seg in event.get_messages()
+            ):
+                old_task = self.running_tasks.pop(umo, None)
+                if old_task and not old_task.done():
+                    old_task.cancel()
+                    logger.info(
+                        f"[抢断机制] 检测到媒体消息，已取消会话 {umo} 的解析任务"
+                    )
+                return
 
-        # 渲染内容并发送
-        async for chain in self.renderer.render_messages(parse_res):
-            yield event.chain_result(chain)  # type: ignore
+        # 创建队列和协程任务
+        queue: Queue = Queue()
+        coro = self._do_parse(event, keyword, searched, umo, queue)
+        task = asyncio.create_task(coro)
+        self.running_tasks[umo] = task
+
+        # 实时从队列拿数据并 yield
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:  # 结束标志
+                    break
+                yield item  # 逐条实时发给框架
+        except asyncio.CancelledError:
+            return  # 如果被外部取消，也停止转发
+        finally:
+            task.cancel()
+            self.running_tasks.pop(umo, None)
+
+    async def _do_parse(
+        self,
+        event: AstrMessageEvent,
+        keyword: str,
+        searched: re.Match,
+        umo: str,
+        queue: Queue,
+    ) -> None:
+        """
+        普通协程，可被 create_task 调度；
+        实时把每条链结果 put 进队列，外部实时 get 并 yield。
+        """
+        try:
+            parser = self.parser_map[keyword]
+            parse_res: ParseResult = await parser.parse(keyword, searched)
+
+            async for chain in self.renderer.render_messages(parse_res):
+                await queue.put(event.chain_result(chain))  # type: ignore
+                await asyncio.sleep(0)  # 让出事件循环，使 cancel 更及时
+        except asyncio.CancelledError:
+            logger.debug(f"解析协程被取消 - {umo}")
+            raise
+        finally:
+            await queue.put(None)  # 告诉消费者“没数据了”
+            self.running_tasks.pop(umo, None)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bm")
@@ -227,6 +309,12 @@ class ParserPlugin(Star):
 
     async def terminate(self):
         """插件卸载时"""
+        # 取消所有解析任务
+        for task in list(self.running_tasks.values()):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self.running_tasks.values(), return_exceptions=True)
+        self.running_tasks.clear()
         # 关下载器里的会话
         await self.downloader.close()
         # 关所有解析器里的会话

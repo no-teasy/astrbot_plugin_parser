@@ -34,6 +34,18 @@
             "油管"
         ]
     },
+    "debounce_interval": {
+        "description": "解析冷却时间（秒）",
+        "type": "int",
+        "hint": "防抖机制：同一个会话下，冷却时间内不解析那些已经解析过的链接。设为 0 表示不启用防抖机制",
+        "default": 600
+    },
+    "enable_tackle": {
+        "description": "抢断机制",
+        "type": "bool",
+        "hint": "抢断机制：多个 Bot 同时收到同一条链接消息，解析速度不同，谁先发出“视频/音频/转发”内容，谁就算“抢答成功”，其他 Bot 必须立刻停止解析",
+        "default": true
+    },
     "forward_contents": {
         "description": "转发媒体内容",
         "type": "bool",
