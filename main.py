@@ -1,6 +1,8 @@
 # main.py
 
+import asyncio
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from astrbot.api import logger
@@ -23,6 +25,7 @@ class ParserPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
+        self._executor = ThreadPoolExecutor(max_workers=2)
 
         # 插件数据目录
         self.data_dir: Path = StarTools.get_data_dir("astrbot_plugin_parser")
@@ -32,19 +35,6 @@ class ParserPlugin(Star):
         self.cache_dir: Path = self.data_dir / "cache_dir"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         config["cache_dir"] = str(self.cache_dir)
-
-        # ytb_cookies
-        if self.config["ytb_ck"]:
-            ytb_cookies_file = self.data_dir / "ytb_cookies.txt"
-            ytb_cookies_file.parent.mkdir(parents=True, exist_ok=True)
-            save_cookies_with_netscape(
-                self.config["ytb_ck"],
-                ytb_cookies_file,
-                "youtube.com",
-            )
-            config["ytb_cookies_file"] = str(ytb_cookies_file)
-
-        config.save_config()
 
         # 关键词 -> Parser 映射
         self.parser_map: dict[str, BaseParser] = {}
@@ -63,8 +53,22 @@ class ParserPlugin(Star):
 
     async def initialize(self):
         """加载、重载插件时触发"""
+        # ytb_cookies
+        if self.config["ytb_ck"]:
+            ytb_cookies_file = self.data_dir / "ytb_cookies.txt"
+            ytb_cookies_file.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                save_cookies_with_netscape,
+                self.config["ytb_ck"],
+                ytb_cookies_file,
+                "youtube.com",
+            )
+            self.config["ytb_cookies_file"] = str(ytb_cookies_file)
+            self.config.save_config()
+        # 加载资源
+        await asyncio.to_thread(CommonRenderer.load_resources)
+        # 注册解析器
         self.register_parser()
-        CommonRenderer.load_resources()
 
     def register_parser(self):
         """注册解析器"""

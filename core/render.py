@@ -1,3 +1,4 @@
+from asyncio import to_thread
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
@@ -494,6 +495,12 @@ class CommonRenderer:
             yield [Plain(message)]
             raise DownloadException(message)
 
+    async def _save_image_to_bytes(self, image: PILImage) -> bytes:
+        output = BytesIO()
+        # 真正耗时的编码在线程里跑
+        await to_thread(image.save, output, format="PNG")
+        return output.getvalue()
+
     async def render_image(self, result: ParseResult) -> bytes:
         """使用 PIL 绘制通用社交媒体帖子卡片
 
@@ -505,11 +512,7 @@ class CommonRenderer:
         """
         # 调用内部方法生成图片
         image = await self._create_card_image(result)
-
-        # 将图片转换为字节
-        output = BytesIO()
-        image.save(output, format="PNG")
-        return output.getvalue()
+        return await self._save_image_to_bytes(image)
 
     async def _create_card_image(
         self,

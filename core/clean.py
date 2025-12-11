@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import zoneinfo
 from pathlib import Path
 
@@ -9,14 +10,14 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.context import Context
 
-from .utils import safe_unlink
-
 
 class CacheCleaner:
     """
     每天固定时间自动清理插件缓存目录的调度器封装。
     """
+
     JOBNAME = "CacheCleaner"
+
     def __init__(self, context: Context, config: AstrBotConfig):
         self.clean_cron = config["clean_cron"]
         self.cache_dir = Path(config["cache_dir"])
@@ -45,17 +46,14 @@ class CacheCleaner:
             logger.error(f"[{self.JOBNAME}] Cron 格式错误：{e}")
 
     async def _clean_plugin_cache(self) -> None:
-        """真正的清理逻辑。"""
+        """删除并重建缓存目录"""
+        loop = asyncio.get_running_loop()
         try:
-            files = [f for f in self.cache_dir.iterdir() if f.is_file()]
-            if not files:
-                logger.info("No cache files to clean.")
-                return
-
-            await asyncio.gather(*(safe_unlink(f) for f in files))
-            logger.info(f"Successfully cleaned {len(files)} cache files.")
+            await loop.run_in_executor(None, shutil.rmtree, self.cache_dir)
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Cache directory cleaned and recreated.")
         except Exception:
-            logger.exception("Error while cleaning cache files.")
+            logger.exception("Error while cleaning cache directory.")
 
     async def stop(self):
         self.scheduler.remove_all_jobs()
