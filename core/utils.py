@@ -1,8 +1,8 @@
 import asyncio
 import hashlib
+import json
 from collections import OrderedDict
 from http import cookiejar
-import json
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -107,7 +107,9 @@ async def merge_av_h264(
         a_path (Path): 音频文件路径
         output_path (Path): 输出文件路径
     """
-    logger.info(f"Merging {v_path.name} and {a_path.name} to {output_path.name} with H.264")
+    logger.info(
+        f"Merging {v_path.name} and {a_path.name} to {output_path.name} with H.264"
+    )
 
     # 修改命令以确保视频使用 H.264 编码
     cmd = [
@@ -198,7 +200,6 @@ def generate_file_name(url: str, default_suffix: str = "") -> str:
     return file_name
 
 
-
 def save_cookies_with_netscape(cookies_str: str, file_path: Path, domain: str):
     """以 netscape 格式保存 cookies
 
@@ -278,6 +279,7 @@ def extract_json_url(data: dict | str) -> str | None:
         return None
 
     for key1, key2 in (
+        ("music", "musicUrl"),
         ("detail_1", "qqdocurl"),
         ("news", "jumpUrl"),
         ("music", "jumpUrl"),
@@ -285,3 +287,4 @@ def extract_json_url(data: dict | str) -> str | None:
         if url := meta.get(key1, {}).get(key2):
             return url
     return None
+
