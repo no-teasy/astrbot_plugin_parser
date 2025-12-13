@@ -343,12 +343,14 @@ class CommonRenderer:
 
 
     @classmethod
-    def _load_platform_logos(cls):
-        """预加载 LOGOS_DIR 下全部 png logo"""
-        cls.platform_logos = {
-            p.stem: Image.open(p).convert("RGBA")
-            for p in cls.LOGOS_DIR.rglob("*.png")
-        }
+    def _load_platform_logos(cls) -> None:
+        cls.platform_logos = {}
+        for p in cls.LOGOS_DIR.rglob("*.png"):
+            try:
+                with Image.open(p) as img:
+                    cls.platform_logos[p.stem] = img.convert("RGBA")
+            except Exception:
+                continue
 
     async def text(
         self,
