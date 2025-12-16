@@ -266,14 +266,10 @@ class ParserPlugin(Star):
 
         # 仲裁机制：谁贴的表情ID值最小，谁来解析
         if isinstance(event, AiocqhttpMessageEvent):
-            is_win = await self.arbiter.compete(
-                bot=event.bot,
-                message_id=int(event.message_obj.message_id),
-                self_id=int(self_id),
-            )
-            logger.debug(f"仲裁结果: {is_win}")
-            if not is_win:
+            if not await self.arbiter.compete(event):
+                logger.debug("Bot在仲裁中输了, 跳过解析")
                 return
+            logger.debug("Bot在仲裁中胜出, 准备解析...")
 
         # 耗时任务：解析+渲染+合并+发送
         task = asyncio.create_task(self.job(event, keyword, searched))

@@ -1,8 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+    AiocqhttpMessageEvent,
+)
 
 
 class EmojiLikeArbiter:
@@ -24,13 +26,7 @@ class EmojiLikeArbiter:
     def __init__(self, config: AstrBotConfig):
         self.wait_sec: float = float(config["arbiter_wait_sec"])
 
-    async def compete(
-        self,
-        bot,
-        *,
-        message_id: int,
-        self_id: int,
-    ) -> bool:
+    async def compete(self, event: AiocqhttpMessageEvent) -> bool:
         """
         参与仲裁
 
@@ -38,8 +34,14 @@ class EmojiLikeArbiter:
             True  -> 本 Bot 负责解析
             False -> 放弃解析
         """
+        client = event.bot
+        message_id = int(event.message_obj.message_id)
+        self_id = int(event.get_self_id())
+        msg = event.message_obj.raw_message
+        msg_time = int(msg.get("time", 0)) # type: ignore
+
         # 第一次检查：是否已经有人贴了，有人贴了就放弃
-        users = await self._fetch_users(bot, message_id)
+        users = await self._fetch_users(client, message_id)
         if users:
             logger.debug(
                 f"[arbiter] 消息({message_id})已有人贴 {self.EMOJI_ID}：{users}"
@@ -48,7 +50,7 @@ class EmojiLikeArbiter:
 
         # 没人贴，尝试自己贴一个
         try:
-            await bot.set_msg_emoji_like(
+            await client.set_msg_emoji_like(
                 message_id=message_id,
                 emoji_id=self.EMOJI_ID,
                 set=True,
@@ -64,14 +66,14 @@ class EmojiLikeArbiter:
         await asyncio.sleep(self.wait_sec)
 
         # 第二次检查
-        users = await self._fetch_users(bot, message_id)
+        users = await self._fetch_users(client, message_id)
         if not users:
             logger.warning(
                 f"[arbiter] 消息({message_id}) 等待后仍无人贴 {self.EMOJI_ID}，API 可能未及时反映 Bot 的操作，视为成功"
             )
             return True
 
-        return self._decide(users, self_id)
+        return self._decide(users, self_id, msg_time)
 
     async def _fetch_users(self, bot, message_id: int) -> list[int]:
         """
@@ -98,20 +100,22 @@ class EmojiLikeArbiter:
 
         return users
 
-    def _decide(self, users: list[int], self_id: int) -> bool:
+    def _decide(self, users: list[int], self_id: int, msg_time: int) -> bool:
         """
-        根据映射规则判断自己是否胜出
+        等概率轮换赢家，但所有机器算出来仍相同
         """
         try:
-            users = sorted(set(users))
-            if not users:
+            users = sorted(set(users))  # 固定顺序
+            n = len(users)
+            if n == 0:
                 raise ValueError("empty user_ids")
 
-            hour = int(datetime.now(timezone.utc).timestamp() // 3600)
-            winner = users[hour % len(users)]
+            # 用消息时间戳当“全局骰子”，得到 0..n-1 的索引
+            index = (msg_time // 60) % n  # 也可以 // 1、// 10，只要>0即可
+            winner = users[index]
         except Exception as e:
             logger.warning(f"[arbiter] 决策失败：{e}")
             return False
 
-        logger.debug(f"[arbiter] 参与者={users}，赢家={winner}")
+        logger.debug(f"[arbiter] 参与者={users}，索引={index}，赢家={winner}")
         return winner == self_id
