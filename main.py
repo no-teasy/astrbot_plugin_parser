@@ -82,11 +82,11 @@ class ParserPlugin(Star):
         # 下载器
         self.downloader = Downloader(config)
 
-        # 仲裁器
-        self.arbiter = EmojiLikeArbiter(config)
-
         # 防抖器
         self.debouncer = LinkDebouncer(config)
+
+        # 仲裁器
+        self.arbiter = EmojiLikeArbiter()
 
         # 会话 -> 正在运行的解析任务
         self.running_tasks: dict[str, asyncio.Task] = {}
