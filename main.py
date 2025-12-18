@@ -31,6 +31,7 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
+from .core.arbiter import ArbiterContext, EmojiLikeArbiter
 from .core.clean import CacheCleaner
 from .core.data import (
     AudioContent,
@@ -41,9 +42,9 @@ from .core.data import (
     ParseResult,
     VideoContent,
 )
+from .core.debounce import LinkDebouncer
 from .core.download import Downloader
 from .core.exception import DownloadException, DownloadLimitException, ZeroSizeException
-from .core.limit import EmojiLikeArbiter, LinkDebouncer
 from .core.parsers import (
     BaseParser,
     BilibiliParser,
@@ -284,18 +285,30 @@ class ParserPlugin(Star):
             return
         logger.debug(f"匹配结果: {keyword}, {searched}")
 
+        # 仲裁机制
+        if isinstance(event, AiocqhttpMessageEvent):
+            raw = event.message_obj.raw_message
+            if not isinstance(raw, dict):
+                logger.warning(f"Unexpected raw_message type: {type(raw)}")
+                return
+            is_win = await self.arbiter.compete(
+                bot=event.bot,
+                ctx=ArbiterContext(
+                    message_id=int(raw["message_id"]),
+                    msg_time=int(raw["time"]),
+                    self_id=int(raw["self_id"]),
+                ),
+            )
+            if not is_win:
+                logger.info("Bot在仲裁中输了, 跳过解析")
+                return
+            logger.info("Bot在仲裁中胜出, 准备解析...")
+
         # 防抖机制：避免短时间重复处理同一链接
         link = searched.group(0)
         if self.config["debounce_interval"] and self.debouncer.hit(umo, link):
             logger.warning(f"[防抖] 链接 {link} 在防抖时间内，跳过解析")
             return
-
-        # 仲裁机制：谁贴的表情ID值最小，谁来解析
-        if isinstance(event, AiocqhttpMessageEvent):
-            if not await self.arbiter.compete(event):
-                logger.debug("Bot在仲裁中输了, 跳过解析")
-                return
-            logger.debug("Bot在仲裁中胜出, 准备解析...")
 
         # 耗时任务：解析+渲染+合并+发送
         task = asyncio.create_task(self.job(event, keyword, searched))
@@ -417,4 +430,3 @@ class ParserPlugin(Star):
             yield event.plain_result("解析已关闭，无需重复关闭")
 
     # endregion
-
