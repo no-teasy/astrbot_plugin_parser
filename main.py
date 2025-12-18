@@ -70,6 +70,7 @@ class ParserPlugin(Star):
         self.cache_dir: Path = self.data_dir / "cache_dir"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         config["cache_dir"] = str(self.cache_dir)
+        self.config.save_config()
 
         # 关键词 -> Parser 映射
         self.parser_map: dict[str, BaseParser] = {}
@@ -300,9 +301,9 @@ class ParserPlugin(Star):
                 ),
             )
             if not is_win:
-                logger.info("Bot在仲裁中输了, 跳过解析")
+                logger.debug("Bot在仲裁中输了, 跳过解析")
                 return
-            logger.info("Bot在仲裁中胜出, 准备解析...")
+            logger.debug("Bot在仲裁中胜出, 准备解析...")
 
         # 防抖机制：避免短时间重复处理同一链接
         link = searched.group(0)
