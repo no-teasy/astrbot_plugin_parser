@@ -402,7 +402,7 @@ class ParserPlugin(Star):
     @filter.command("登录B站", alias={"blogin", "登录b站"})
     async def login_bilibili(self, event: AstrMessageEvent):
         """扫码登录B站"""
-        parser: BilibiliParser = self.get_parser_by_type(BilibiliParser)  # type: ignore
+        parser: BilibiliParser = self._get_parser_by_type(BilibiliParser)  # type: ignore
         qrcode = await parser.login_with_qrcode()
         yield event.chain_result([Image.fromBytes(qrcode)])
         async for msg in parser.check_qr_state():
