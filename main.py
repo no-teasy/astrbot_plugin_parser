@@ -157,52 +157,6 @@ class ParserPlugin(Star):
                 return parser
         raise ValueError(f"未找到类型为 {parser_type} 的 parser 实例")
 
-    async def _make_messages(self, result: ParseResult) -> list[BaseMessageComponent]:
-        """组装消息"""
-        segs: list[BaseMessageComponent] = []
-
-        # 1. 获取媒体内容
-        for cont in chain(
-            result.contents, result.repost.contents if result.repost else ()
-        ):
-            try:
-                path = await cont.get_path()
-            except (DownloadLimitException, ZeroSizeException):
-                continue
-            except DownloadException:
-                segs.append(Plain("此项媒体下载失败"))
-                continue
-
-            match cont:
-                case FileContent():
-                    segs.append(File(name=path.name, file=str(path)))
-                case VideoContent() | DynamicContent():
-                    segs.append(Video(str(path)))
-                case AudioContent():
-                    segs.append(
-                        File(name=path.name, file=str(path))
-                        if self.config["audio_to_file"]
-                        else Record(str(path))
-                    )
-                case ImageContent():
-                    segs.append(Image(str(path)))
-                case GraphicsContent() as g:
-                    segs.append(Image(str(path)))
-                    if g.text:
-                        segs.append(Plain(g.text))
-                    if g.alt:
-                        segs.append(Plain(g.alt))
-
-        # 2. 生成卡片
-        if not (
-            self.config["simple_mode"]
-            and any(isinstance(seg, Video | Record | File) for seg in segs)
-        ):
-            if image_path := await self.renderer.render_card(result):
-                segs.insert(0, Image(str(image_path)))
-
-        return segs
-
     def _build_send_plan(self, result: ParseResult):
         light_contents = []
         heavy_contents = []
@@ -262,7 +216,7 @@ class ParserPlugin(Star):
         # 轻媒体
         for cont in plan["light"]:
             try:
-                path = await cont.get_path()
+                path: Path = await cont.get_path()
             except (DownloadLimitException, ZeroSizeException):
                 continue
             except DownloadException:
@@ -282,7 +236,7 @@ class ParserPlugin(Star):
         # 重媒体
         for cont in plan["heavy"]:
             try:
-                path = await cont.get_path()
+                path: Path = await cont.get_path()
             except DownloadException:
                 segs.append(Plain("此项媒体下载失败"))
                 continue
@@ -299,7 +253,7 @@ class ParserPlugin(Star):
                 case FileContent():
                     segs.append(File(name=path.name, file=str(path)))
 
-        # ⑤ 强制合并
+        # 强制合并
         if plan["force_merge"] and segs:
             nodes = Nodes([])
             self_id = event.get_self_id()
